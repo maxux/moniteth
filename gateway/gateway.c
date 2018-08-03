@@ -16,6 +16,8 @@
 #include <linux/if.h>
 #include <linux/if_packet.h>
 
+static char reusemac[18];
+
 uint16_t ethtype = 0x42F0;
 int ifindex = -1;
 
@@ -26,6 +28,17 @@ void warnp(char *str) {
 void diep(char *str) {
     warnp(str);
     exit(EXIT_FAILURE);
+}
+
+static char *bufmac(uint8_t *source) {
+    ssize_t offset = 0;
+
+    for(int i = 0; i < 6; i++)
+        offset += sprintf(reusemac + offset, "%02x:", source[i]);
+
+    reusemac[17] = '\0';
+
+    return reusemac;
 }
 
 static int socket_init(char *interface) {
@@ -43,8 +56,7 @@ static int socket_init(char *interface) {
     strncpy(ifr.ifr_name , interface , IFNAMSIZ - 1);
     ioctl(sockfd, SIOCGIFHWADDR, &ifr);
 
-    unsigned char *x = (unsigned char *) ifr.ifr_hwaddr.sa_data;
-    printf("[+] interface address: %02x:%02x:%02x:%02x:%02x:%02x\n" , x[0], x[1], x[2], x[3], x[4], x[5]);
+    printf("[+] interface address: %s\n" , bufmac((uint8_t *) ifr.ifr_hwaddr.sa_data));
 
     if(setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface, IFNAMSIZ-1) < 0)
         diep("reuse: setsockopt");
@@ -95,6 +107,16 @@ static void sendframe(int sockfd, const uint8_t *data, uint16_t length) {
 }
 */
 
+int validate(uint8_t *source) {
+    // only accept mac address following A2:42:42:42:42:xx
+    uint8_t check[5] = {0xa2, 0x42, 0x42, 0x42, 0x42};
+    if(memcmp(source, check, 5))
+        return 1;
+
+    printf("[+] authorized frame from: %s\n", bufmac(source));
+    return 0;
+}
+
 static uint16_t readframe(int sockfd, uint8_t *buffer, uint16_t bufsize) {
     int length;
 
@@ -130,7 +152,13 @@ int main(int argc, char *argv[]) {
         if((length = readframe(sockfd, buffer, sizeof(buffer))) <= 0)
             continue;
 
-        fulldump(buffer, length);
+        // reject unknown source
+        if(validate(buffer + 6)) {
+            printf("[-] unauthorized frame from: %s\n", bufmac(buffer + 6));
+            continue;
+        }
+
+        fulldump(buffer + 14, length - 14);
     }
 
     return 0;
