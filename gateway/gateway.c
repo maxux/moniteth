@@ -13,16 +13,25 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <netinet/in.h>
+#include <netdb.h>
 #include <linux/if.h>
 #include <linux/if_packet.h>
+#include "../protocol/moniteth.h"
 
-static char reusemac[18];
+#define SERVER_TARGET  "10.241.0.254"
+#define SERVER_PORT    30502
+
+time_t cooldown[512] = {0};
+
+static char strbuf[24];
 
 uint16_t ethtype = 0x42F0;
 int ifindex = -1;
 
-void warnp(char *str) {
+int warnp(char *str) {
     fprintf(stderr, "[-] %s: %s\n", str, strerror(errno));
+    return 1;
 }
 
 void diep(char *str) {
@@ -34,11 +43,88 @@ static char *bufmac(uint8_t *source) {
     ssize_t offset = 0;
 
     for(int i = 0; i < 6; i++)
-        offset += sprintf(reusemac + offset, "%02x:", source[i]);
+        offset += sprintf(strbuf + offset, "%02x:", source[i]);
 
-    reusemac[17] = '\0';
+    strbuf[17] = '\0';
 
-    return reusemac;
+    return strbuf;
+}
+
+static char *ds18id(uint8_t *buffer) {
+    size_t offset = 3;
+
+    sprintf(strbuf, "%02x-", buffer[0]);
+
+    for(int i = 1; i < 8; i++)
+        offset += sprintf(strbuf + offset, "%02x", buffer[i]);
+
+    return strbuf;
+}
+
+int http(char *endpoint, char *argv1, char *argv2, int dirty) {
+    int sockfd;
+    struct sockaddr_in addr_remote;
+    struct hostent *hent;
+    char payload[512];
+
+    addr_remote.sin_family = AF_INET;
+    addr_remote.sin_port = htons(SERVER_PORT);
+
+    if((hent = gethostbyname(SERVER_TARGET)) == NULL)
+        return warnp("http: gethostbyname");
+
+    memcpy(&addr_remote.sin_addr, hent->h_addr_list[0], hent->h_length);
+
+    if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+        return warnp("http: socket");
+
+    if(connect(sockfd, (const struct sockaddr *) &addr_remote, sizeof(addr_remote)) < 0)
+        return warnp("http: connect");
+
+    if(dirty == 1) {
+        sprintf(payload, "GET /%s/%ld/%s/%s HTTP/1.0\r\n\r\n", endpoint, time(NULL), argv1, argv2);
+
+    } else if(dirty == 2) {
+        sprintf(payload, "GET /%s/%s/%ld/%s HTTP/1.0\r\n\r\n", endpoint, argv1, time(NULL), argv2);
+    }
+
+    if(send(sockfd, payload, strlen(payload), 0) < 0)
+        return warnp("http send");
+
+    close(sockfd);
+
+    return 0;
+}
+
+int http_power(moth_power_t *power) {
+    char argv1[128];
+    char argv2[128];
+    int cid = power->phase + 40;
+
+    if(cooldown[cid] > time(NULL))
+        return 1;
+
+    sprintf(argv1, "%d", power->phase);
+    sprintf(argv2, "%d", power->power);
+
+    cooldown[cid] = time(NULL) + 2;
+
+    return http("power", argv1, argv2, 1);
+}
+
+int http_ds18(moth_ds18_t *sensor) {
+    char argv1[128];
+    char argv2[128];
+
+    if(cooldown[0] > time(NULL))
+        return 1;
+
+    sprintf(argv1, "%s", ds18id(sensor->deviceid));
+    sprintf(argv2, "%.2f", sensor->temperature / 1000.0);
+
+    cooldown[0] = time(NULL) + 60;
+
+    return http("sensors", argv1, argv2, 2);
 }
 
 static int socket_init(char *interface) {
@@ -158,7 +244,51 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        fulldump(buffer + 14, length - 14);
+        if(buffer[14] == MONITETH_TYPE_DS18X20) {
+            moth_ds18_t dallas;
+            uint32_t convert;
+
+            memcpy(dallas.deviceid, buffer + 15, 8);
+            memcpy(&convert, buffer + 23, 4);
+
+            dallas.temperature = __builtin_bswap32(convert);
+
+            printf("[+] ds18b20: [%s]: %.2f°C\n", ds18id(dallas.deviceid), dallas.temperature / 1000.0);
+            http_ds18(&dallas);
+        }
+
+        if(buffer[14] == MONITETH_TYPE_DHT22) {
+            moth_dht22_t dht22;
+            uint32_t convert32;
+            uint16_t convert16;
+
+            memcpy(&convert16, buffer + 15, 2);
+            dht22.deviceid = __builtin_bswap16(convert16);
+
+            memcpy(&convert32, buffer + 17, 4);
+            dht22.temperature = __builtin_bswap32(convert32);
+
+            memcpy(&convert32, buffer + 21, 4);
+            dht22.humidity = __builtin_bswap32(convert32);
+
+            printf("[+] dht22: [%d]: %.2f°C - %.2f %%\n", dht22.deviceid, dht22.temperature / 1000.0, dht22.humidity / 1000.0);
+        }
+
+        if(buffer[14] == MONITETH_TYPE_POWER) {
+            moth_power_t power;
+            uint32_t convert32;
+
+            power.phase = *(buffer + 15);
+
+            memcpy(&convert32, buffer + 16, 4);
+            power.power = __builtin_bswap32(convert32);
+
+            printf("[+] power: [phase %d]: %d watt\n", power.phase, power.power);
+            http_power(&power);
+        }
+
+
+        // fulldump(buffer + 14, length - 14);
     }
 
     return 0;
