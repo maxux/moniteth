@@ -13,17 +13,17 @@
     typedef struct moth_ds18_t {
         uint8_t deviceid[8];
         int32_t temperature;
-    };
+    } moth_ds18_t;
 
     typedef struct moth_dht22_t {
         uint16_t deviceid;
         int32_t temperature;
-        uint8_t humidity;
-    };
+        int32_t humidity;
+    } moth_dht22_t;
 
     typedef struct moth_power_t {
         uint8_t phase;
         int32_t power;
-    };
+    } moth_power_t;
 
 #endif

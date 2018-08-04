@@ -9,7 +9,7 @@ and a linux server. No TCP/IP stack needed, only pure ethernet frames.
 # Quick Setup
 This project allows simple communication between your Arduino board and your linux server, using Ethernet.
 This comes with some limitation:
-- Frame cannot be larger than 1486 bytes
+- Frame cannot be larger than `1486 bytes`
 - You need to hardcode the device identifier per device
 
 But, basicly, that's all.
@@ -52,7 +52,7 @@ Get temperature and humidity from a DHT22 sensor.
 Payload contains:
 - 2 bytes for device identifier
 - 4 bytes signed integer for temperature
-- 1 byte for humidity value in percent
+- 4 bytes for humidity value in percent
 
 Temperature needs to be divided by 1000 to have Celsius temperature.
 
