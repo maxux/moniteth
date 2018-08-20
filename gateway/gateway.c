@@ -61,7 +61,14 @@ static char *ds18id(uint8_t *buffer) {
     return strbuf;
 }
 
-int http(char *endpoint, char *argv1, char *argv2, int dirty) {
+static char *dhtid(uint16_t id) {
+    sprintf(strbuf, "d-%d", id);
+    return strbuf;
+}
+
+
+// BAAAAAAAAAAAAAAAD.
+int http(char *endpoint, char *argv1, char *argv2, char *argv3, int dirty) {
     int sockfd;
     struct sockaddr_in addr_remote;
     struct hostent *hent;
@@ -86,6 +93,9 @@ int http(char *endpoint, char *argv1, char *argv2, int dirty) {
 
     } else if(dirty == 2) {
         sprintf(payload, "GET /%s/%s/%ld/%s HTTP/1.0\r\n\r\n", endpoint, argv1, time(NULL), argv2);
+
+    } else if(dirty == 3) {
+        sprintf(payload, "GET /%s/%s/%ld/%s/%s HTTP/1.0\r\n\r\n", endpoint, argv1, time(NULL), argv2, argv3);
     }
 
     if(send(sockfd, payload, strlen(payload), 0) < 0)
@@ -109,7 +119,7 @@ int http_power(moth_power_t *power) {
 
     cooldown[cid] = time(NULL) + 2;
 
-    return http("power", argv1, argv2, 1);
+    return http("power", argv1, argv2, NULL, 1);
 }
 
 int http_ds18(moth_ds18_t *sensor) {
@@ -124,7 +134,25 @@ int http_ds18(moth_ds18_t *sensor) {
 
     cooldown[0] = time(NULL) + 60;
 
-    return http("sensors", argv1, argv2, 2);
+    return http("sensors", argv1, argv2, NULL, 2);
+}
+
+int http_dht(moth_dht22_t *sensor) {
+    char argv1[128];
+    char argv2[128];
+    char argv3[128];
+    int did = sensor->deviceid + 100;
+
+    if(cooldown[did] > time(NULL))
+        return 1;
+
+    sprintf(argv1, "%s", dhtid(sensor->deviceid));
+    sprintf(argv2, "%.2f", sensor->temperature / 1000.0);
+    sprintf(argv3, "%.2f", sensor->humidity / 1000.0);
+
+    cooldown[did] = time(NULL) + 60;
+
+    return http("sensors-dht", argv1, argv2, argv3, 3);
 }
 
 static int socket_init(char *interface) {
@@ -272,6 +300,7 @@ int main(int argc, char *argv[]) {
             dht22.humidity = __builtin_bswap32(convert32);
 
             printf("[+] dht22: [%d]: %.2f°C - %.2f %%\n", dht22.deviceid, dht22.temperature / 1000.0, dht22.humidity / 1000.0);
+            http_dht(&dht22);
         }
 
         if(buffer[14] == MONITETH_TYPE_POWER) {
