@@ -4,9 +4,9 @@
 #include "w5100.h"
 #include "EmonLib.h"
 
-// laptix bond0 mac address
+// routinx lan mac address
 const byte srvaddr[] = {
-    0x28, 0xf1, 0x0e, 0x01, 0x6b, 0x84
+    0x34, 0x97, 0xf6, 0x3f, 0x99, 0x97
 };
 
 // custom device mac address
