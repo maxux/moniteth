@@ -22,7 +22,7 @@
 #define SERVER_TARGET  "10.241.0.254"
 #define SERVER_PORT    30502
 
-time_t cooldown[512] = {0};
+time_t cooldown[2048] = {0};
 
 static char strbuf[24];
 
@@ -126,13 +126,15 @@ int http_ds18(moth_ds18_t *sensor) {
     char argv1[128];
     char argv2[128];
 
-    if(cooldown[0] > time(NULL))
+    int id = 500 + sensor->deviceid[7];
+
+    if(cooldown[id] > time(NULL))
         return 1;
 
     sprintf(argv1, "%s", ds18id(sensor->deviceid));
     sprintf(argv2, "%.2f", sensor->temperature / 1000.0);
 
-    cooldown[0] = time(NULL) + 60;
+    cooldown[id] = time(NULL) + 60;
 
     return http("sensors", argv1, argv2, NULL, 2);
 }
