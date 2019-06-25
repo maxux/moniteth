@@ -276,7 +276,7 @@ int main(int argc, char *argv[]) {
 
         if(buffer[14] == MONITETH_TYPE_DS18X20) {
             moth_ds18_t dallas;
-            uint32_t convert;
+            int32_t convert;
 
             memcpy(dallas.deviceid, buffer + 15, 8);
             memcpy(&convert, buffer + 23, 4);
