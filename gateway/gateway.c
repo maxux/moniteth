@@ -125,14 +125,23 @@ int http_power(moth_power_t *power) {
 int http_ds18(moth_ds18_t *sensor) {
     char argv1[128];
     char argv2[128];
+    double temp = sensor->temperature / 1000.0;
 
     int id = 500 + sensor->deviceid[7];
+
+    // -127°C fix
+    if(temp < -100)
+        return 1;
+
+    // 4.07 fake value fix
+    if(temp < 4.1 && temp > 4.0)
+        return 1;
 
     if(cooldown[id] > time(NULL))
         return 1;
 
     sprintf(argv1, "%s", ds18id(sensor->deviceid));
-    sprintf(argv2, "%.2f", sensor->temperature / 1000.0);
+    sprintf(argv2, "%.2f", temp);
 
     cooldown[id] = time(NULL) + 60;
 
