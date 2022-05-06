@@ -22,6 +22,9 @@
 #define SERVER_TARGET  "10.241.0.254"
 #define SERVER_PORT    30502
 
+#define GPIO_SERVER_TARGET  "10.241.0.200"
+#define GPIO_SERVER_PORT    5000
+
 time_t cooldown[2048] = {0};
 
 static char strbuf[24];
@@ -106,6 +109,36 @@ int http(char *endpoint, char *argv1, char *argv2, char *argv3, int dirty) {
     return 0;
 }
 
+int http_switch_request(char *endpoint) {
+    int sockfd;
+    struct sockaddr_in addr_remote;
+    struct hostent *hent;
+    char payload[512];
+
+    addr_remote.sin_family = AF_INET;
+    addr_remote.sin_port = htons(GPIO_SERVER_PORT);
+
+    if((hent = gethostbyname(GPIO_SERVER_TARGET)) == NULL)
+        return warnp("http: gethostbyname");
+
+    memcpy(&addr_remote.sin_addr, hent->h_addr_list[0], hent->h_length);
+
+    if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+        return warnp("http: socket");
+
+    if(connect(sockfd, (const struct sockaddr *) &addr_remote, sizeof(addr_remote)) < 0)
+        return warnp("http: connect");
+
+    sprintf(payload, "GET /%s HTTP/1.0\r\n\r\n", endpoint);
+
+    if(send(sockfd, payload, strlen(payload), 0) < 0)
+        return warnp("http switch send");
+
+    close(sockfd);
+
+    return 0;
+}
+
 int http_power(moth_power_t *power) {
     char argv1[128];
     char argv2[128];
@@ -164,6 +197,20 @@ int http_dht(moth_dht22_t *sensor) {
     cooldown[did] = time(NULL) + 60;
 
     return http("sensors-dht", argv1, argv2, argv3, 3);
+}
+
+int http_switch(moth_switch_t *switcher) {
+    if(switcher->id == 1) {
+        printf("[+] switch: power down\n");
+        return http_switch_request("powerdown");
+    }
+
+    if(switcher->id == 2) {
+        printf("[+] switch: power up\n");
+        return http_switch_request("powerup");
+    }
+
+    return 1;
 }
 
 static int socket_init(char *interface) {
@@ -326,6 +373,15 @@ int main(int argc, char *argv[]) {
             printf("[+] power: [phase %d]: %d watt\n", power.phase, power.power);
             http_power(&power);
         }
+
+        if(buffer[14] == MONITETH_TYPE_SWITCH) {
+            moth_switch_t switcher;
+            switcher.id = *(buffer + 15);
+
+            printf("[+] switch: id %d received\n", switcher.id);
+            http_switch(&switcher);
+        }
+
 
 
         // fulldump(buffer + 14, length - 14);
