@@ -160,21 +160,21 @@ int http_ds18(moth_ds18_t *sensor) {
     char argv2[128];
     double temp = sensor->temperature / 1000.0;
 
-    int id = 500 + sensor->deviceid[7];
+    int id = 500 + sensor->deviceid[7] + sensor->deviceid[6] + sensor->deviceid[5];
 
     // -127°C fix
     if(temp < -100)
         return 1;
 
     // 4.07 fake value fix
-    if(temp < 4.1 && temp > 4.0)
-        return 1;
+    // if(temp < 4.1 && temp > 4.0)
+    //    return 1;
 
     if(cooldown[id] > time(NULL))
         return 1;
 
     sprintf(argv1, "%s", ds18id(sensor->deviceid));
-    sprintf(argv2, "%.2f", temp);
+    sprintf(argv2, "%d", sensor->temperature);
 
     cooldown[id] = time(NULL) + 60;
 
@@ -341,6 +341,23 @@ int main(int argc, char *argv[]) {
 
             printf("[+] ds18b20: [%s]: %.2f°C\n", ds18id(dallas.deviceid), dallas.temperature / 1000.0);
             http_ds18(&dallas);
+        }
+
+        if(buffer[14] == MONITETH_TYPE_DS18X20_R1) {
+            moth_ds18_t dallas;
+            int32_t convert;
+
+            fulldump(buffer + 15, 12);
+            memcpy(dallas.deviceid, buffer + 15, 8);
+            memcpy(&convert, buffer + 23, 4);
+
+            dallas.temperature = __builtin_bswap32(convert);
+
+            printf("================\n");
+            printf("[+] ds18b20: [%s]: %.2f°C\n", ds18id(dallas.deviceid), dallas.temperature / 1000.0);
+            printf("================\n");
+
+            // http_ds18(&dallas);
         }
 
         if(buffer[14] == MONITETH_TYPE_DHT22) {
