@@ -1,6 +1,5 @@
 #include "OneWire.h"
 #include "DallasTemperature.h"
-#include "DHT.h"
 #include "w5100.h"
 #include "EmonLib.h"
 
@@ -25,18 +24,11 @@ uint16_t netlength = 32;
 
 OneWire oneWire(ONE_WIRE_BUS); 
 DallasTemperature sensors(&oneWire);
-DeviceAddress sensoraddr;
+DeviceAddress sensoraddr0, sensoraddr1;
 
 struct moth_ds18_t {
     uint8_t deviceid[8];
     int32_t temperature;
-
-} __attribute__((packed));
-
-struct moth_dht22_t {
-    uint16_t deviceid;
-    int32_t temperature;
-    int32_t humidity;
 
 } __attribute__((packed));
 
@@ -46,12 +38,6 @@ struct moth_power_t {
 
 } __attribute__((packed));
 
-
-// dht sensor
-#define DHTPIN  7
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
-
 // power sensors
 #define PWR_SENSORS 3
 
@@ -59,7 +45,6 @@ EnergyMonitor emons[PWR_SENSORS];
 
 // our devices
 struct moth_ds18_t *dallas = (struct moth_ds18_t *)((uint8_t *) netbuffer + 15);
-struct moth_dht22_t *dht22 = (struct moth_dht22_t *)((uint8_t *) netbuffer + 15);
 struct moth_power_t *power = (struct moth_power_t *)((uint8_t *) netbuffer + 15);
 
 static inline uint16_t __builtin_bswap16(uint16_t a) {
@@ -97,11 +82,11 @@ void setup(void)  {
     Serial.print(sensors.getDeviceCount(), DEC);
     Serial.println(" devices found");
 
-    if(!sensors.getAddress(sensoraddr, 0))
+    if(!sensors.getAddress(sensoraddr0, 0))
         Serial.println("Unable to find address for Device 0");
 
-    // initializing dht
-    dht.begin();
+    if(!sensors.getAddress(sensoraddr1, 1))
+        Serial.println("Unable to find address for Device 1");
 
     // init power
     for(int i = 0; i < PWR_SENSORS; i++)
@@ -112,47 +97,41 @@ void loop(void)  {
     float temp, hum;
     int32_t convert;
 
+    Serial.println("[+] requesting temperatures"); 
+    sensors.requestTemperatures();
+
     //
     // ds18b20
     //
     memset(netbuffer + 14, 0x00, sizeof(netbuffer) - 14);
 
-    Serial.println("[+] requesting temperatures"); 
-    sensors.requestTemperatures();
-
-    temp = sensors.getTempC(sensoraddr);
+    temp = sensors.getTempC(sensoraddr0);
     Serial.print("[+] temperature: ");
     Serial.println(temp);
 
     convert = temp * 1000;
     dallas->temperature = __builtin_bswap32(convert);
-    memcpy(dallas->deviceid, sensoraddr, 8);
+    memcpy(dallas->deviceid, sensoraddr0, 8);
 
     Serial.println("[+] sending network frame");
     netbuffer[14] = 0x03;
     w5100.sendFrame(netbuffer, netlength);
 
     //
-    // dht22
+    //
     //
     memset(netbuffer + 14, 0x00, sizeof(netbuffer) - 14);
 
-    hum = dht.readHumidity();
-    temp = dht.readTemperature();
-
-    Serial.print("[+] humidity: ");
-    Serial.print(hum);
-    Serial.print(" %, temperature: ");
+    temp = sensors.getTempC(sensoraddr1);
+    Serial.print("[+] temperature: ");
     Serial.println(temp);
 
     convert = temp * 1000;
-    dht22->temperature = __builtin_bswap32(convert);
+    dallas->temperature = __builtin_bswap32(convert);
+    memcpy(dallas->deviceid, sensoraddr1, 8);
 
-    convert = hum * 1000;
-    dht22->humidity = __builtin_bswap32(convert);
-    dht22->deviceid = __builtin_bswap16(1);
-
-    netbuffer[14] = 0x04;
+    Serial.println("[+] sending network frame");
+    netbuffer[14] = 0x03;
     w5100.sendFrame(netbuffer, netlength);
 
     //
