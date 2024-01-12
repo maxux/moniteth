@@ -18,6 +18,7 @@
 #include <linux/if.h>
 #include <linux/if_packet.h>
 #include <sys/epoll.h>
+#include <syslog.h>
 
 #define MAXEVENTS 64
 
@@ -173,7 +174,7 @@ static uint16_t readframe(int sockfd, uint8_t *buffer, uint16_t bufsize) {
     return length;
 }
 
-void open_door(int sockfd) {
+void open_door(int sockfd, char *door) {
     uint8_t buffer[1500];
     uint8_t source[] = {0x34, 0x97, 0xf6, 0x3f, 0x99, 0x97};
     uint8_t destination[] = {0xA2, 0x42, 0x42, 0x42, 0x42, 0xA0};
@@ -185,7 +186,8 @@ void open_door(int sockfd) {
     buffer[12] = 0x42;
     buffer[13] = 0xF1;
 
-    char *x = "OPEN DOOR ---";
+    char x[64];
+    sprintf(x, "OPEN DOOR %s ---", door);
     memcpy(buffer + 14, x, strlen(x));
 
     int length = 14 + strlen(x);
@@ -237,10 +239,14 @@ int handle_trigger_socket(int sockfd) {
     }
 
     buffer[length] = '\0';
-    char *match = "OPEN DOOR PLEASE";
+    char *matchl = "OPEN DOOR LEFT PLEASE";
+    char *matchr = "OPEN DOOR RIGHT PLEASE";
 
-    if(strncmp(buffer, match, strlen(match)) == 0) {
+    if(strncmp(buffer, matchl, strlen(matchl)) == 0) {
         status = 1;
+
+    } else if(strncmp(buffer, matchr, strlen(matchr)) == 0) {
+        status = 2;
 
     } else {
         printf("[-] trigger client: invalid message\n");
@@ -256,6 +262,8 @@ int main(int argc, char *argv[]) {
     int evfd;
 
     printf("[+] initializing garage door gateway\n");
+    openlog("doorgw", LOG_CONS | LOG_PID, LOG_LOCAL7);
+    syslog(LOG_INFO, "Initializing garage gateway");
 
     if(argc > 1)
         intf = argv[1];
@@ -305,9 +313,17 @@ int main(int argc, char *argv[]) {
             if(ev->data.fd == triggerfd) {
                 printf("[+] network activity: trigger socket\n");
                 if(handle_trigger_socket(triggerfd) == 1) {
-                    printf("[+] trigger open door\n");
-                    // open_door(doorfd);
+                    printf("[+] trigger open door (left)\n");
+                    syslog(LOG_INFO, "Trigger garage door button [left]");
+                    open_door(doorfd, "LEFT");
                 }
+
+                if(handle_trigger_socket(triggerfd) == 2) {
+                    printf("[+] trigger open door (right)\n");
+                    syslog(LOG_INFO, "Trigger garage door button [right]");
+                    open_door(doorfd, "RIGHT");
+                }
+
             }
         }
     }
