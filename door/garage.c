@@ -318,13 +318,15 @@ int main(int argc, char *argv[]) {
 
             if(ev->data.fd == triggerfd) {
                 printf("[+] network activity: trigger socket\n");
-                if(handle_trigger_socket(triggerfd) == 1) {
+                int status = handle_trigger_socket(triggerfd);
+
+                if(status == 1) {
                     printf("[+] trigger open door (left)\n");
                     syslog(LOG_INFO, "Trigger garage door button [left]");
                     open_door(doorfd, "LEFT");
                 }
 
-                if(handle_trigger_socket(triggerfd) == 2) {
+                if(status == 2) {
                     printf("[+] trigger open door (right)\n");
                     syslog(LOG_INFO, "Trigger garage door button [right]");
                     open_door(doorfd, "RIGHT");
