@@ -228,24 +228,30 @@ int handle_trigger_socket(int sockfd) {
     int length;
     int status = 0;
 
+    printf("[+] trigger: accpting new connection request\n");
     if((clientfd = accept(sockfd, NULL, NULL)) < 0) {
         perror("accept");
         return 0;
     }
 
+    printf("[+] trigger: waiting message\n");
     if((length = recv(clientfd, buffer, sizeof(buffer), 0)) < 0) {
         perror("recv");
         return 0;
     }
 
     buffer[length] = '\0';
+    printf("[+] trigger: message length: %d, %s\n", length, buffer);
+
     char *matchl = "OPEN DOOR LEFT PLEASE";
     char *matchr = "OPEN DOOR RIGHT PLEASE";
 
     if(strncmp(buffer, matchl, strlen(matchl)) == 0) {
+        printf("[+] trigger: open [left] door message received\n");
         status = 1;
 
     } else if(strncmp(buffer, matchr, strlen(matchr)) == 0) {
+        printf("[+] trigger: open [right] door message received\n");
         status = 2;
 
     } else {
