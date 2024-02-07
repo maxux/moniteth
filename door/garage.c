@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <linux/if.h>
@@ -28,6 +29,31 @@ static int yes = 1;
 uint16_t ethtype = 0x42F1;
 int ifindex = -1;
 
+typedef enum door_status_t {
+    DOOR_INITIALIZING,
+    OPEN_REQUEST_RECEIVED,
+    OPEN_REQUEST_FORWARDED,
+    OPEN_REQUEST_CONFIRMED,
+    WAITING_FOR_REQUEST,
+
+} door_status_t;
+
+typedef struct door_state_t {
+    door_status_t status;
+    int retried;
+    int door;
+    double last_retry;
+    int req_fd;
+
+} door_state_t;
+
+door_state_t main_door_state = {
+    .status = DOOR_INITIALIZING,
+    .retried = 0,
+    .last_retry = 0,
+    .req_fd = 0,
+};
+
 int warnp(char *str) {
     fprintf(stderr, "[-] %s: %s\n", str, strerror(errno));
     return 1;
@@ -41,6 +67,13 @@ void diep(char *str) {
 void dieg(char *str, int status) {
     fprintf(stderr, "[-] %s: %s\n", str, gai_strerror(status));
     exit(EXIT_FAILURE);
+}
+
+double gettimedouble() {
+    struct timeval n;
+
+    gettimeofday(&n, NULL);
+    return (double)(n.tv_usec) / 1000000 + (double)(n.tv_sec);
 }
 
 static char *bufmac(uint8_t *source) {
@@ -194,6 +227,7 @@ void open_door(int sockfd, char *door) {
 
     printf("[+] sending open door frame\n");
     sendframe(sockfd, buffer, length);
+
     fulldump(buffer, length);
 }
 
@@ -219,18 +253,68 @@ void handle_door_socket(int sockfd) {
     if(memcmp(buffer + 14, ping, strlen(ping)) == 0) {
         char *mac = bufmac(source);
         printf("[+] ping message from device: %s\n", mac);
+        return;
     }
+
+    char *leftack = "LEFT DOOR OPEN ACK";
+    char *rightack = "RIGHT DOOR OPEN ACK";
+
+    if(memcmp(buffer + 14, leftack, strlen(leftack)) == 0) {
+        printf("[+] left door acknowledge received\n");
+
+        if(send(main_door_state.req_fd, leftack, strlen(leftack), 0) < 0)
+            warnp("send");
+
+        close(main_door_state.req_fd);
+
+        memset(&main_door_state, 0x00, sizeof(main_door_state));
+        main_door_state.status = WAITING_FOR_REQUEST;
+        return;
+    }
+
+    if(memcmp(buffer + 14, rightack, strlen(rightack)) == 0) {
+        printf("[+] right door acknowledge received\n");
+
+        if(send(main_door_state.req_fd, rightack, strlen(rightack), 0) < 0)
+            warnp("send");
+
+        close(main_door_state.req_fd);
+
+        memset(&main_door_state, 0x00, sizeof(main_door_state));
+        main_door_state.status = WAITING_FOR_REQUEST;
+        return;
+    }
+
+}
+
+int trigger_socket_validated(int door, int fd) {
+    main_door_state.door = door;
+    main_door_state.req_fd = fd;
+    main_door_state.status = OPEN_REQUEST_RECEIVED;
+    main_door_state.retried = 0;
+    main_door_state.last_retry = 0;
+
+    return door;
 }
 
 int handle_trigger_socket(int sockfd) {
     int clientfd;
     char buffer[1500];
     int length;
-    int status = 0;
 
     printf("[+] trigger: accpting new connection request\n");
     if((clientfd = accept(sockfd, NULL, NULL)) < 0) {
         perror("accept");
+        return 0;
+    }
+
+    if(main_door_state.req_fd != 0) {
+        char *deny = "REMOTE IS BUSY";
+
+        if(send(clientfd, deny, strlen(deny), 0) < 0)
+            warnp("send");
+
+        close(clientfd);
         return 0;
     }
 
@@ -248,19 +332,69 @@ int handle_trigger_socket(int sockfd) {
 
     if(strncmp(buffer, matchl, strlen(matchl)) == 0) {
         printf("[+] trigger: open [left] door message received\n");
-        status = 1;
+        return trigger_socket_validated(1, clientfd);
 
-    } else if(strncmp(buffer, matchr, strlen(matchr)) == 0) {
-        printf("[+] trigger: open [right] door message received\n");
-        status = 2;
-
-    } else {
-        printf("[-] trigger client: invalid message\n");
     }
 
+    if(strncmp(buffer, matchr, strlen(matchr)) == 0) {
+        printf("[+] trigger: open [right] door message received\n");
+        return trigger_socket_validated(2, clientfd);
+    }
+
+    printf("[-] trigger client: invalid message\n");
     close(clientfd);
 
-    return status;
+    return 0;
+}
+
+void handle_pending_operations(int doorfd) {
+    if(main_door_state.status == WAITING_FOR_REQUEST)
+        return;
+
+    if(main_door_state.status == OPEN_REQUEST_FORWARDED) {
+        double now = gettimedouble();
+
+        if(main_door_state.retried > 4) {
+            // timed out, something wrong
+            char *timeout = "TIMED OUT";
+
+            if(send(main_door_state.req_fd, timeout, strlen(timeout), 0) < 0)
+                warnp("send");
+
+            close(main_door_state.req_fd);
+
+            memset(&main_door_state, 0x00, sizeof(main_door_state));
+            main_door_state.status = WAITING_FOR_REQUEST;
+
+            return;
+        }
+
+        if(now > (main_door_state.last_retry + 0.3)) {
+            printf("[+] resend trigger open door [retry %d]\n", main_door_state.retried);
+            open_door(doorfd, main_door_state.door == 1 ? "LEFT" : "RIGHT");
+
+            main_door_state.last_retry = gettimedouble();
+            main_door_state.retried += 1;
+        }
+    }
+
+    if(main_door_state.status == OPEN_REQUEST_RECEIVED) {
+        if(main_door_state.door == 1) {
+            printf("[+] trigger open door (left)\n");
+            syslog(LOG_INFO, "Trigger garage door button [left]");
+            open_door(doorfd, "LEFT");
+        }
+
+        if(main_door_state.door == 2) {
+            printf("[+] trigger open door (right)\n");
+            syslog(LOG_INFO, "Trigger garage door button [right]");
+            open_door(doorfd, "RIGHT");
+        }
+
+        main_door_state.status = OPEN_REQUEST_FORWARDED;
+        main_door_state.last_retry = gettimedouble();
+    }
+
 }
 
 int main(int argc, char *argv[]) {
@@ -301,10 +435,17 @@ int main(int argc, char *argv[]) {
         diep("epoll_ctl: trigger");
 
     events = calloc(MAXEVENTS, sizeof event);
+    main_door_state.status = WAITING_FOR_REQUEST;
 
     while(1) {
+        int n;
         printf("[+] waiting for network activity\n");
-        int n = epoll_wait(evfd, events, MAXEVENTS, -1);
+
+        while((n = epoll_wait(evfd, events, MAXEVENTS, 100)) == 0) {
+            handle_pending_operations(doorfd);
+            continue;
+        }
+
         if(n < 0)
             diep("epoll_wait");
 
@@ -318,20 +459,10 @@ int main(int argc, char *argv[]) {
 
             if(ev->data.fd == triggerfd) {
                 printf("[+] network activity: trigger socket\n");
-                int status = handle_trigger_socket(triggerfd);
+                handle_trigger_socket(triggerfd);
 
-                if(status == 1) {
-                    printf("[+] trigger open door (left)\n");
-                    syslog(LOG_INFO, "Trigger garage door button [left]");
-                    open_door(doorfd, "LEFT");
-                }
-
-                if(status == 2) {
-                    printf("[+] trigger open door (right)\n");
-                    syslog(LOG_INFO, "Trigger garage door button [right]");
-                    open_door(doorfd, "RIGHT");
-                }
-
+                // force pending operation to avoid waiting timeout
+                handle_pending_operations(doorfd);
             }
         }
     }
